@@ -1,222 +1,153 @@
-# CHC Collector
+# GWSP Collector
 
-CHC Collector is a PowerShell-based artifact collection framework for Windows.
-It runs modular sub-collectors, writes normalized file indexes, and optionally
-archives results into a ZIP package with SHA256 integrity metadata.
+GWSP Collector pulls Google Workspace Admin SDK Reports activity and Alert Center alerts, normalizes them to single-line JSON events, and writes them to a JSONL file for a local Wazuh agent to forward to a remote Wazuh manager.
 
-## Highlights
+The collector is incremental. It keeps a JSON state file with per-source checkpoints and only writes events that were not already committed.
 
-- Modular collector architecture (`collectors/*.ps1`)
-- Master runner with collector selection (`-Artifacts`)
-- Shared logging and optional console mirroring (`-ShowLog`)
-- Normalized file index format across collectors (`collected_files.csv`)
-- SHA256 hashing for collected artifacts
-- Optional archive packaging and archive SHA256 output
+## Features
 
-## Repository Structure
+- Google Workspace service account authentication with domain-wide delegation.
+- Admin SDK Reports collection across configured applications.
+- Alert Center collection.
+- Pagination support for Reports and Alert Center APIs.
+- Timestamp overlap and same-timestamp deduplication for delayed events.
+- Gmail Reports window splitting to respect the 30-day API window.
+- Cross-platform paths and scheduling examples.
+- Wazuh `localfile` examples and starter rules.
 
-- `CHC_Collector.ps1`: Master script
-- `collectors/05_runtime.ps1`: Live runtime state (connections/processes JSON)
-- `collectors/06_winget.ps1`: Live installed software and available updates
-- `collectors/07_license.ps1`: Live Windows license and embedded OEM key state
-- `collectors/08_hardware.ps1`: Live hardware inventory and serial numbers
-- `collectors/10_registry.ps1`: Registry collection (offline or live)
-- `collectors/12_evtx.ps1`: Event log collection (offline or live)
-- `collectors/21_anydesk.ps1`: AnyDesk artifact collection
+## Install
 
-## Requirements
-
-- Windows PowerShell 5.1+ (or PowerShell with Windows networking/registry cmdlets)
-- Windows host access to required sources
-- Administrator rights recommended (required by default in master script)
-
-## Quick Start - Bootstrap script
-
-You can download and execute the toolkit in one command line using Powershell (as Administator):
+Create a virtual environment and install the package:
 
 ```powershell
-Set-ExecutionPolicy Unrestricted -Scope LocalMachine
-iwr https://raw.githubusercontent.com/zarubikus/CHC_Collector/refs/heads/main/support/CHC_Bootstrap.ps1 | iex
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -e .
 ```
 
-`CHC_Bootstrap.ps1` is a bootstrap script that downloads the toolkit and runs it.
+On Linux:
 
-
-The same command but executed from cmd.exe:
-
-```cmd.exe
-powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/zarubikus/CHC_Collector/refs/heads/main/support/CHC_Bootstrap.ps1 | iex"
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .
 ```
 
-## Quick Start - Local Copy
+## Google Workspace Setup
 
-Run all collectors with defaults:
+Follow [docs/google-workspace-setup.md](docs/google-workspace-setup.md).
+
+Required OAuth scopes:
+
+```text
+https://www.googleapis.com/auth/admin.reports.audit.readonly,https://www.googleapis.com/auth/apps.alerts
+```
+
+## Configure
+
+Copy [config.example.yaml](config.example.yaml) to a secure location and edit:
+
+- `google.service_account_file` or `google.service_account_file_env`
+- `google.delegated_admin` or `google.delegated_admin_env`
+- `collector.output_dir`
+- `collector.output_file_template`
+- `collector.state_path`
+- `reports.applications`
+
+Validate:
+
+```bash
+gwsp-collector validate-config --config /etc/gwsp-collector/config.yaml
+```
+
+Run once:
+
+```bash
+gwsp-collector run --config /etc/gwsp-collector/config.yaml
+```
+
+Show the planned Google API requests without contacting Google Workspace:
+
+```bash
+gwsp-collector run --config /etc/gwsp-collector/config.yaml --dry-run
+```
+
+The Windows-compatible single-dash form also works:
+
+```bat
+gwsp-collector run --config C:\ProgramData\gwsp-collector\config.yaml -dry-run
+```
+
+On Windows, edit [scripts/run-windows.bat](scripts/run-windows.bat) with your config, service account key, and delegated admin values, then run it from Task Scheduler or a terminal.
+
+On Ubuntu/Linux, use [scripts/run-ubuntu.sh](scripts/run-ubuntu.sh). It defaults to `/opt/gwsp-collector` and expects config/credentials under `/opt/gwsp-collector/local/`.
+
+Daily log files older than `collector.compress_after_days` are compressed and moved under `logs/YYYY/YYYY-MM/`. If `collector.output_dir` is already named `logs`, that directory is used; otherwise a `logs` subfolder is created. Existing archive names are never overwritten; a numeric suffix is added when needed. Each `.gz` archive gets a neighboring `.gz.sha256` file with its SHA256 digest.
+
+Print state:
+
+```bash
+gwsp-collector state --config /etc/gwsp-collector/config.yaml
+```
+
+For a long-running process instead of cron/systemd:
+
+```bash
+gwsp-collector run --config /etc/gwsp-collector/config.yaml --loop
+```
+
+Backfill and archive historical daily data without touching normal incremental state:
+
+```bash
+gwsp-collector archive --dry-run
+gwsp-collector archive
+gwsp-collector archive --start-time 2026-01-01 --end-lag-days 5 --dry-run
+```
+
+Archive mode defaults to `/opt/gwsp-collector/local/config.yaml` when `--config` is not provided. If `--start-time` is not provided, it starts at the current UTC date minus 180 days, then collects one day at a time through today minus `--end-lag-days` days. If a compressed archive already exists under `collector.output_dir/logs/YYYY/YYYY-MM/`, that day is skipped.
+
+## Wazuh
+
+Configure the Wazuh agent on the collector host to tail the JSONL file:
+
+- Linux example: [wazuh/ossec-linux.xml](wazuh/ossec-linux.xml)
+- Windows example: [wazuh/ossec-windows.xml](wazuh/ossec-windows.xml)
+
+Copy starter rules to the Wazuh manager:
+
+- [wazuh/rules/google_workspace_rules.xml](wazuh/rules/google_workspace_rules.xml)
+
+Restart the Wazuh agent after changing `ossec.conf`. Restart the Wazuh manager after adding rules.
+
+## Scheduling
+
+See [docs/scheduling.md](docs/scheduling.md) for Linux systemd timer, cron, and Windows Task Scheduler examples.
+
+The default `collector.poll_interval` is `300s`. For scheduled runs, the scheduler controls cadence; the state file prevents duplicate output.
+
+## State
+
+The state file tracks:
+
+- `reports.<application>.last_committed_time`
+- `reports.<application>.seen_ids`
+- `alerts.last_committed_create_time`
+- `alerts.seen_ids`
+- `last_success`
+- `last_error`
+
+State is committed only after JSONL writes complete. If a run fails, the next run retries from the previous committed checkpoint with the configured overlap.
+
+## Tests
+
+The included tests use only stdlib and mocked clients:
 
 ```powershell
-.\CHC_Collector.ps1
+$env:PYTHONPATH = "src"
+python -m unittest discover -s tests
 ```
 
-Run selected collectors with log output to console:
+On Linux:
 
-```powershell
-.\CHC_Collector.ps1 -Artifacts registry,evtx -ShowLog
+```bash
+PYTHONPATH=src python -m unittest discover -s tests
 ```
-
-Run all and force runtime collector even if `-SourceRoot` is present:
-
-```powershell
-.\CHC_Collector.ps1 -SourceRoot D:\MountedImage
-```
-
-Show help for master and selected collectors:
-
-```powershell
-.\CHC_Collector.ps1 -Help -Artifacts runtime
-```
-
-## Master Script Options
-
-- `-MachineName <string>`: Override machine name used in output naming
-- `-SourceRoot <string>`: Offline source root for collectors that support offline mode
-- `-OutputRoot <string>`: Output root directory (default: `<repo>\output`)
-- `-Artifacts <list>`: Collector names (`all`, `runtime`, `winget`, `license`, `hardware`, `registry`, `evtx`, `anydesk`)
-- `-Log <path>`: Shared log file path
-- `-ShowLog`: Print log lines to console
-- `-NoCleanup`: Preserve existing master ZIP/log and do not pass `-Cleanup` to collectors
-- `-NoArchive`: Skip ZIP packaging
-- `-NoAdminRequired`: Allow master execution without elevation
-- `-Help`: Show help and run sub-collector help
-
-## Collector Behavior
-
-### Runtime (`05_runtime.ps1`)
-
-- Produces:
-  - `runtime/connections.json`
-  - `runtime/processes.json`
-  - `collected_files.csv` entries for generated JSON artifacts
-- `-SourceRoot` handling:
-  - Skips by default when explicitly provided
-  - Supports `-Force` to run live anyway
-
-### Winget (`06_winget.ps1`)
-
-- Live-only collector for installed software and available updates
-- Produces:
-  - `winget/installed_software.json`
-  - `winget/available_updates.json`
-  - `winget/winget_environment.json`
-  - raw `winget.exe` output files when WinGet is available
-  - `collected_files.csv` entries for generated artifacts
-- Collection sources:
-  - Registry uninstall keys
-  - AppX packages when accessible
-  - `Get-Package` when available
-  - `Microsoft.WinGet.Client` if already installed
-  - `winget.exe list`, `winget.exe upgrade`, and `winget.exe source list`
-- `-SourceRoot` handling:
-  - Skips by default when explicitly provided
-  - Supports `-Force` to run live anyway
-- The collector does not install modules, install software, or run upgrades
-
-### License (`07_license.ps1`)
-
-- Live-only collector for Windows licensing state
-- Produces:
-  - `license/license_status.json`
-  - `collected_files.csv` entry for the generated JSON artifact
-- Collection sources:
-  - `Win32_OperatingSystem`
-  - `SoftwareLicensingService`
-  - `SoftwareLicensingProduct`
-  - `OA3xOriginalProductKey` for embedded BIOS/UEFI OEM key when available
-- `-SourceRoot` handling:
-  - Skips by default when explicitly provided
-  - Supports `-Force` to run live anyway
-- The collector does not run activation commands or modify license state
-
-### Hardware (`08_hardware.ps1`)
-
-- Live-only collector for hardware inventory and serial numbers
-- Produces:
-  - `hardware/hardware_info.json`
-  - `collected_files.csv` entry for the generated JSON artifact
-- Collection sources:
-  - `Win32_ComputerSystem`
-  - `Win32_OperatingSystem`
-  - `Win32_BIOS`
-  - `Win32_BaseBoard`
-  - `Win32_SystemEnclosure`
-  - `Win32_Processor`
-  - `Win32_PhysicalMemory`
-  - `Win32_DiskDrive`
-  - `Win32_LogicalDisk`
-  - `Win32_VideoController`
-  - `Win32_NetworkAdapter`
-  - `Win32_NetworkAdapterConfiguration`
-  - `Win32_PnPEntity`
-  - `Win32_Tpm` when available
-- `-SourceRoot` handling:
-  - Skips by default when explicitly provided
-  - Supports `-Force` to run live anyway
-- The collector does not modify hardware, firmware, or OS state
-
-### Registry (`10_registry.ps1`)
-
-- Offline mode: when `-SourceRoot` is explicitly provided
-- Live mode: when `-SourceRoot` is not provided
-- Writes artifacts under `registry/...`
-- Appends collected file metadata to shared `collected_files.csv`
-
-### EVTX (`12_evtx.ps1`)
-
-- Offline mode: when `-SourceRoot` is explicitly provided
-- Live mode: when `-SourceRoot` is not provided
-- Live export path mirrors `evtx/Windows/System32/winevt/Logs/...`
-- Appends collected file metadata to shared `collected_files.csv`
-
-### AnyDesk (`21_anydesk.ps1`)
-
-- Collects from known AnyDesk locations (ProgramData, user profile paths, system profile, temp)
-- Appends discovered/collected file metadata to shared `collected_files.csv`
-
-## Output Layout
-
-Default output folder:
-
-`<repo>\output\<MachineName>-<yyyyMMdd>\`
-
-Typical contents:
-
-- Collector subfolders (`runtime`, `winget`, `license`, `hardware`, `registry`, `evtx`, `anydesk`) when data exists
-- `collected_files.csv` (shared normalized file index)
-- `<MachineName>-<yyyyMMdd>_master.log` (default log path unless overridden)
-
-If archiving is enabled (default):
-
-- `<MachineName>-<yyyyMMdd>.zip`
-- `<MachineName>-<yyyyMMdd>.SHA256`
-
-## File Index Format
-
-Collectors use a common schema for `collected_files.csv`:
-
-- `Source Type`
-- `Full Original Path`
-- `Destination Path`
-- `File Created`
-- `File Modified`
-- `File Access`
-- `Size`
-- `Attributes`
-- `SHA256`
-- `Collected`
-- `Collection Method`
-- `Message`
-
-## Notes
-
-- Collectors are designed to avoid creating empty output subfolders when no data is collected.
-- Runtime/state collection can include privileged metadata (process owner/path/SID) depending on rights.
-- Winget/update collection depends on installed WinGet components and source availability.
-- Some system-protected sources may require Administrator access.

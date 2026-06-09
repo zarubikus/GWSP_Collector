@@ -1,0 +1,70 @@
+google:
+  service_account_file: "/opt/gwsp-collector/local/service-account.json"
+  service_account_file_env: "GWSP_SERVICE_ACCOUNT_FILE"
+  delegated_admin: "admin@example.com"
+  delegated_admin_env: "GWSP_DELEGATED_ADMIN"
+  customer_id: null
+collector:
+  output_dir: "/var/gwsp/logs/"
+  output_file_template: "gwsp_events_%Y-%m-%d.jsonl"
+  # Files older than this are compressed and moved to logs/YYYY/YYYY-MM/.
+  compress_after_days: 7
+  state_path: "/var/gwsp/run/gwsp_state.json"
+  poll_interval: "300s"
+  overlap_seconds: 600
+  initial_lookback: "24h"
+  page_size: 1000
+  include_sensitive_data: false
+reports:
+  enabled: true
+  applications:
+    - "access_transparency"
+    - "admin"
+    - "calendar"
+    - "chat"
+    - "drive"
+    - "gcp"
+    - "gmail"
+    - "gplus"
+    - "groups"
+    - "groups_enterprise"
+    - "jamboard"
+    - "login"
+    - "meet"
+    - "mobile"
+    - "rules"
+    - "saml"
+    - "token"
+    - "user_accounts"
+    - "context_aware_access"
+    - "chrome"
+    - "data_studio"
+    - "keep"
+    - "vault"
+    - "gemini_in_workspace_apps"
+    - "classroom"
+    - "assignments"
+    - "cloud_search"
+    - "tasks"
+    - "data_migration"
+    - "meet_hardware"
+    - "directory_sync"
+    - "ldap"
+    - "profile"
+    - "access_evaluation"
+    - "admin_data_action"
+    - "contacts"
+    - "takeout"
+    - "graduation"
+alerts:
+  enabled: true
+  order_by: "createTime asc"
+  filter: null
+data_transfer:
+  applications:
+    - id: "55656082996"
+      name: "Drive and Docs"
+    - id: "435070579839"
+      name: "Calendar"
+    - id: "810260081642"
+      name: "Data Studio"

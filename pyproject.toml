@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gwsp-collector"
+version = "0.1.0"
+description = "Google Workspace Reports and Alert Center collector for Wazuh"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "google-api-python-client>=2.150.0",
+  "google-auth>=2.35.0",
+  "PyYAML>=6.0.2",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+gwsp-collector = "gwsp_collector.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
